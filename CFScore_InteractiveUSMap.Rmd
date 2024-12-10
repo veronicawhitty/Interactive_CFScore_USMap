@@ -1,0 +1,203 @@
+---
+title: "Interactive Map of the United States by State Average CF Score"
+output: html_document
+date: "2024-12-11"
+---
+
+```{r, include = FALSE, echo = FALSE, warning = FALSE}
+library(dplyr)
+library(tidyverse)
+library(knitr)
+library(ggplot2)
+CFdata <- read_csv("/Users/vfw/Downloads/CFScoreDataset.csv")
+```
+
+```{r Violin Plot of Ideology, include = FALSE, echo = FALSE, warning = FALSE}
+# Clean and preprocess data
+CFdata <- CFdata |>
+  mutate(party = factor(party, levels = c(100, 200, 328), 
+                       labels = c("Democratic", "Republican", "Independent/Non-Partisan")),
+         cfscore = as.numeric(cfscore))
+
+# Check for missing values and filter them out if necessary
+CFdata_clean <- CFdata |>
+  filter(!is.na(cfscore), !is.na(party))
+
+# Calculate mean CFscore for each party
+party_means <- CFdata_clean |>
+  group_by(party) |>
+  summarize(mean_cfscore = mean(cfscore, na.rm = TRUE))
+
+# Distribution of CFscores by party with mean points
+ggplot(CFdata_clean, aes(x = party, y = cfscore, fill = party)) +
+  geom_violin(trim = FALSE) +
+  geom_point(data = party_means, aes(x = party, y = mean_cfscore), 
+             color = "black", shape = 16, size = 3, show.legend = FALSE) +  # Add mean points
+  geom_text(data = party_means, aes(x = party, y = mean_cfscore, label = round(mean_cfscore, 2)),              color = "black", hjust = 0, nudge_x = 0.25, size = 4) +  # Text to the right of the dots
+  labs(title = "Distribution of Judicial CFscores by Political Party",
+       x = "Political Party",
+       y = "Judicial CFscore") +
+  theme_minimal() +
+  scale_fill_manual(values = c("dodgerblue3", "red3", "grey"))
+```
+
+```{r CF Scores over Time, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+# Visualize CF Scores over time
+CFdata_clean <- CFdata_clean |>
+  filter(!is.na(year_enter))
+
+ggplot(CFdata_clean, aes(x = year_enter, y = cfscore, color = party)) +
+  geom_jitter(alpha = 0.5) +
+  geom_smooth(method = "loess", se = FALSE, aes(color = party)) +
+  labs(title = "Temporal Trends of Judicial CFscores by Political Party",
+       x = "Year Entered Bench",
+       y = "Judicial CFscore") +
+  theme_minimal() +
+  scale_color_manual(values = c("dodgerblue3", "red3", "grey"))
+```
+
+```{r CF Scores by Appointment Type, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+CFdata_clean <- CFdata_clean |>
+  mutate(appointment_type = case_when(
+    appointed == 1 ~ "Appointed",
+    legislative_election == 1 ~ "Legislative Election",
+    non_partisan_election == 1 ~ "Non-Partisan Election",
+    TRUE ~ "Other"
+  ))
+
+summary_stats <- CFdata_clean |>
+  group_by(party, appointment_type) |>
+  summarize(
+    max_cfscore = max(cfscore, na.rm = TRUE),
+    min_cfscore = min(cfscore, na.rm = TRUE),
+    mean_cfscore = mean(cfscore, na.rm = TRUE),
+    median_cfscore = median(cfscore, na.rm = TRUE),
+    q25_cfscore = quantile(cfscore, 0.25, na.rm = TRUE),
+    q75_cfscore = quantile(cfscore, 0.75, na.rm = TRUE)
+  )
+
+ggplot(CFdata_clean, aes(x = appointment_type, y = cfscore, fill = party)) +
+  geom_boxplot(outlier.colour = "grey", outlier.size = 2, alpha = 0.8) + 
+  scale_fill_manual(values = c("dodgerblue3", "red3", "grey")) + 
+  facet_wrap(~party, scales = "fixed") +  
+  labs(title = "CFscores by Appointment Type and Political Party",
+       x = "Appointment Type",
+       y = "Judicial CFscore") +
+  theme_minimal() +
+  theme(legend.position = "none", 
+        strip.text = element_text(size = 12), 
+        axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  coord_cartesian(ylim = c(-1.5, 1.5)) +  
+  geom_text(data = summary_stats, 
+            aes(x = appointment_type, y = max_cfscore, label = paste("Max: ", round(max_cfscore, 2))),
+            vjust = -3, color = "black", size = 2) +  # Increased vjust to give more space
+  geom_text(data = summary_stats, 
+            aes(x = appointment_type, y = min_cfscore, label = paste("Min: ", round(min_cfscore, 2))),
+            vjust = 1, color = "black", size = 2) +  # Increased vjust
+  geom_text(data = summary_stats, 
+            aes(x = appointment_type, y = mean_cfscore, label = paste("Mean: ", round(mean_cfscore, 2))),
+            vjust = .6, color = "black", size = 2) +  # Increased vjust
+  geom_text(data = summary_stats, 
+            aes(x = appointment_type, y = q25_cfscore, label = paste("25th: ", round(q25_cfscore, 2))),
+            vjust = 1.5, color = "black", size = 2) +  # Increased vjust
+  geom_text(data = summary_stats, 
+            aes(x = appointment_type, y = q75_cfscore, label = paste("75th: ", round(q75_cfscore, 2))),
+            vjust = -1.5, color = "black", size = 2)
+```
+
+```{r Map Visualization, echo = FALSE, message = FALSE, warning = FALSE}
+library(maps)
+library(plotly)
+library(dplyr)
+
+# Create state abbreviation to full name mapping, add missing states, and standardize state names
+state_mapping <- data.frame(
+  state_abbreviation = tolower(state.abb),
+  state_full = tolower(state.name)
+)
+state_mapping <- rbind(
+  state_mapping,
+  data.frame(state_abbreviation = c("dc", "ok (crim)", "tx (crim)"),
+             state_full = c("district of columbia", "oklahoma", "texas"))
+)
+CFdata <- CFdata |>
+  mutate(state = tolower(trimws(state))) |>  # Ensure lowercase and remove extra spaces
+  left_join(state_mapping, by = c("state" = "state_abbreviation")) |>
+  mutate(state = coalesce(state_full, state))  # Replace abbreviations with full names if available
+
+# Find our average CF scores by state
+state_avg_cfscore <- CFdata |>
+  group_by(state) |>
+  summarize(avg_cfscore = mean(cfscore, na.rm = TRUE)) |>
+  ungroup()
+
+# Load map data and merge the state names and average CF score into the map data
+us_map <- map_data("state")
+us_map_avg_cfscore <- us_map |>
+  left_join(state_avg_cfscore, by = c("region" = "state"))
+
+# Categorize states based on avg_cfscore ranges and count the number of states in each category
+us_map_avg_cfscore <- us_map_avg_cfscore |>
+  mutate(
+    category = case_when(
+      avg_cfscore >= -0.9 & avg_cfscore < -0.35 ~ "Liberal",
+      avg_cfscore >= -0.35 & avg_cfscore < -0.1 ~ "Slightly Liberal",
+      avg_cfscore >= 0.35 & avg_cfscore < 0.8 ~ "Conservative",
+      avg_cfscore >= 0.1 & avg_cfscore < 0.35 ~ "Slightly Conservative",
+      abs(avg_cfscore) <= 0.1 ~ "Independent",
+      TRUE ~ "Other"
+    ),
+    hover_text = paste(
+      "<b>State:</b>", tools::toTitleCase(region),
+      "<br><b>Avg CF Score:</b>", round(avg_cfscore, 2),
+      "<br><b>Avg Ideology Group:</b><i>", category, "</i>"
+    )
+  )
+
+# Step 7: Calculate the number of states in each category
+state_counts <- us_map_avg_cfscore |>
+  distinct(region, category) |>
+  count(category)
+
+# Create the actual map visualization
+ggplot_map <- ggplot(us_map_avg_cfscore, aes(x = long, y = lat, group = group, fill = avg_cfscore)) +
+  geom_polygon(color = "black", size = 0.1, aes(text = hover_text)) +
+  scale_fill_gradient2(
+    low = "dodgerblue3", mid = "white", high = "red3", midpoint = 0,
+    na.value = "grey", name = "Avg CF Score",
+    breaks = c(-0.8, 0, 0.79),  # Add places where the labels should go on the key to the side
+    labels = c("Liberal", "Independent/Non-Partisan", "Conservative")
+  ) +
+  coord_fixed(ratio = 1.3) +  # Adjusts aspect ratio (spacing was weird otherwise)
+  labs(
+    title = "All-Time Average CF Scores of State Supreme Court Justices by State",
+    x = "Longitude", y = "Latitude"
+  ) +
+  theme_minimal()
+
+# Convert to interactive Plotly map
+interactive_map_plotly <- ggplotly(ggplot_map, tooltip = "text")
+
+# Add the information we got from count to a subheader underneath the title of our map
+interactive_map_plotly <- interactive_map_plotly |>
+  layout(
+    annotations = list(
+      text = paste(
+        "Liberal:", state_counts$n[state_counts$category == "Liberal"],
+        " | Slightly Liberal:", state_counts$n[state_counts$category == "Slightly Liberal"],
+        " | Conservative:", state_counts$n[state_counts$category == "Conservative"],
+        " | Slightly Conservative:", state_counts$n[state_counts$category == "Slightly Conservative"],
+        " | Independent:", state_counts$n[state_counts$category == "Independent"]
+      ),
+      x = 0, y = 1.05,
+      xref = "paper", yref = "paper",
+      showarrow = FALSE,
+      font = list(size = 10),
+      align = "center"
+    )
+  )
+interactive_map_plotly
+```
+
+
+
